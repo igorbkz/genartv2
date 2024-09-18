@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Art TV</title>
+    <style>
+        :root {
+            --primary-bg: #121212;
+            --secondary-bg: #1e1e1e;
+            --text-color: #eee;
+            --accent-color: #bb86fc;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: var(--primary-bg);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        #imageContainer {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 10px;
+            padding: 10px;
+            padding-bottom: 80px; /* Space for controls */
+        }
+        .image-card {
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.3s;
+            background: var(--secondary-bg);
+            position: relative;
+        }
+        .image-card img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .image-card:hover {
+            transform: scale(1.02);
+        }
+        .new-image-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: var(--accent-color);
+            color: var(--primary-bg);
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+        .controls {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: transparent; /* Removida a faixa escura */
+        }
+        .controls button, .controls input {
+            margin: 0 5px;
+            padding: 8px 15px;
+            border-radius: 20px; /* Botões mais arredondados */
+            border: none;
+            background-color: #333; /* Cor de fundo escura */
+            color: #fff; /* Texto branco */
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .controls button:hover {
+            background-color: #555; /* Cor mais clara ao passar o mouse */
+        }
+        .controls input {
+            background-color: #222; /* Input mais escuro */
+            color: #fff;
+        }
+        .lightbox {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        .lightbox img {
+            max-height: 90vh;
+            max-width: 90vw;
+            object-fit: contain;
+        }
+        .nav-button {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: none;
+            padding: 15px;
+            cursor: pointer;
+            font-size: 24px;
+            border-radius: 50%;
+        }
+        .nav-button.prev { left: 20px; }
+        .nav-button.next { right: 20px; }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 3000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.8);
+            padding-top: 60px;
+        }
+        .modal-content {
+            background-color: var(--secondary-bg);
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+            color: var(--text-color);
+            border-radius: 10px;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover { color: #fff; }
+        @media (max-width: 600px) {
+            .controls { flex-wrap: wrap; }
+            .controls button { margin: 5px; }
+            .modal-content { width: 95%; }
+        }
+        .speed-selector {
+            margin-left: 10px;
+            padding: 5px;
+            border-radius: 15px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+        }
+        .lightbox-prompt {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 80%;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="imageContainer"></div>
+
+    <div class="controls">
+        <input type="text" id="themeInput" placeholder="Digite um tema" onkeydown="handleKeyDown(event)">
+        <button onclick="addTheme()">Adicionar</button>
+        <button onclick="showThemes()">Temas</button>
+        <button onclick="togglePause()"><span id="pauseButtonText">Pausar</span></button>
+        <select id="speedSelector" class="speed-selector" onchange="updateGenerationSpeed()">
+            <option value="5">5s</option>
+            <option value="10" selected>10s</option>
+            <option value="15">15s</option>
+            <option value="20">20s</option>
+            <option value="25">25s</option>
+            <option value="30">30s</option>
+        </select>
+    </div>
+
+    <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
+        <span id="lightboxClose" class="close">&times;</span>
+        <button class="nav-button prev" onclick="showPrevImage(event)">&#10094;</button>
+        <img id="lightboxImage" src="" alt="Enlarged Image">
+        <p id="lightboxPrompt" class="lightbox-prompt"></p>
+        <button class="nav-button next" onclick="showNextImage(event)">&#10095;</button>
+    </div>
+
+    <div id="themeModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2>Temas Adicionados</h2>
+            <ul id="themeList"></ul>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev";
+        const API_KEY = "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";
+        const LLAMA_API_URL = "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3-8B-Instruct";
+        const prompts = [];
+        const generatedPrompts = new Set();
+        const images = [];
+        const recentPrompts = [];
+        let paused = false;
+        let currentIndex = -1;
+
+        const themeModal = document.getElementById('themeModal');
+        const themeList = document.getElementById('themeList');
+        const lightbox = document.getElementById('lightbox');
+        const lightboxImage = document.getElementById('lightboxImage');
+
+        async function query(prompt) {
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ inputs: prompt })
+                });
+                if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+                const blob = await response.blob();
+                return URL.createObjectURL(blob);
+            } catch (error) {
+                console.error('Error fetching image:', error);
+                return null;
+            }
+        }
+
+        const usedPrompts = new Set();
+
+        async function generatePromptWithLLM(themes) {
+            const systemPrompt = "You are an image prompt generator. Generate a short, interesting, and unique image prompt based on the given themes. The prompt should be no longer than 15 words and should not include any additional commentary or questions. Only output the prompt itself.";
+            const userPrompt = themes.join(", ");
+            
+            try {
+                const response = await fetch(LLAMA_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        inputs: `${systemPrompt}\n\nThemes: ${userPrompt}\n\nImage Prompt:`,
+                        parameters: {
+                            max_new_tokens: 30,
+                            temperature: 0.9,
+                            top_p: 0.95,
+                            do_sample: true,
+                            stop: ["\n", ".", "!"]
+                        }
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+                const result = await response.json();
+                console.log("Raw LLM response:", result); // Para depuração
+                let generatedPrompt = result[0].generated_text.split("Image Prompt:")[1].trim();
+                
+                // Remove qualquer texto após o primeiro ponto final ou ponto de exclamação
+                generatedPrompt = generatedPrompt.split(/[.!]/)[0].trim();
+                
+                // Limita o prompt a 15 palavras
+                const words = generatedPrompt.split(' ');
+                if (words.length > 15) {
+                    generatedPrompt = words.slice(0, 15).join(' ');
+                }
+                
+                return generatedPrompt;
+            } catch (error) {
+                console.error('Error generating prompt with LLM:', error);
+                return null;
+            }
+        }
+
+        let generationInterval = 10000; // Padrão: 10 segundos
+        let generationTimeout;
+
+        function updateGenerationSpeed() {
+            const speedSelector = document.getElementById('speedSelector');
+            generationInterval = parseInt(speedSelector.value) * 1000;
+            console.log("New generation interval:", generationInterval); // Para depuração
+            scheduleNextGeneration();
+        }
+
+        function scheduleNextGeneration() {
+            clearTimeout(generationTimeout);
+            generationTimeout = setTimeout(() => {
+                if (!paused && prompts.length > 0) {
+                    generateImage().then(() => {
+                        scheduleNextGeneration();
+                    });
+                } else {
+                    scheduleNextGeneration();
+                }
+            }, generationInterval);
+        }
+
+        async function generateImage() {
+            if (paused || prompts.length === 0) return;
+            
+            const prompt = await getRandomPrompt();
+            console.log("Final prompt for image generation:", prompt); // Para depuração
+            const imageUrl = await query(prompt);
+            if (imageUrl) {
+                requestAnimationFrame(() => displayImage(imageUrl, prompt));
+            } else {
+                console.error('Failed to generate image for:', prompt);
+            }
+        }
+
+        function addTheme() {
+            const themeInput = document.getElementById('themeInput');
+            const theme = themeInput.value.trim();
+            if (theme === '') {
+                alert('Por favor, digite um tema.');
+                return;
+            }
+            if (prompts.includes(theme)) {
+                alert('Este tema já foi adicionado.');
+                return;
+            }
+            prompts.unshift(theme);
+            themeInput.value = '';
+            updateThemeList();
+            generateImage();
+        }
+
+        function togglePause() {
+            paused = !paused;
+            document.getElementById('pauseButtonText').textContent = paused ? 'Retomar' : 'Pausar';
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter') addTheme();
+        }
+
+        const imageObserver = new IntersectionObserver((entries, observer) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    img.src = img.dataset.src;
+                    img.removeAttribute('data-src');
+                    observer.unobserve(img);
+                }
+            });
+        }, { rootMargin: '100px' });
+
+        function displayImage(imageUrl, prompt) {
+            const container = document.getElementById('imageContainer');
+            const imgCard = document.createElement('div');
+            imgCard.classList.add('image-card');
+            imgCard.innerHTML = `
+                <img src="${imageUrl}" alt="Generated Image" loading="lazy" decoding="async">
+                <div class="new-image-indicator">Nova</div>
+            `;
+            imgCard.onclick = () => showLightbox(imageUrl, prompt, container.children.length);
+            container.insertBefore(imgCard, container.firstChild);
+            images.unshift({ url: imageUrl, prompt: prompt });
+            if (images.length > 50) {
+                const oldestImage = images.pop();
+                URL.revokeObjectURL(oldestImage.url);
+                container.lastChild.remove();
+            }
+            if (currentIndex === -1) currentIndex = 0;
+            
+            const img = imgCard.querySelector('img');
+            img.dataset.src = imageUrl;
+            img.src = 'placeholder.jpg'; // Use uma imagem de placeholder leve
+            imageObserver.observe(img);
+            
+            showNewImageIndicator(imgCard);
+        }
+
+        function showLightbox(imageUrl, prompt, index) {
+            currentIndex = index;
+            lightboxImage.src = imageUrl;
+            document.getElementById('lightboxPrompt').textContent = prompt;
+            lightbox.style.display = 'flex';
+        }
+
+        function closeLightbox(event) {
+            if (event.target === lightbox || event.target === document.getElementById('lightboxClose')) {
+                lightbox.style.display = 'none';
+            }
+        }
+
+        function showPrevImage(event) {
+            event.stopPropagation();
+            currentIndex = (currentIndex > 0) ? currentIndex - 1 : images.length - 1;
+            lightboxImage.src = images[currentIndex].url;
+            document.getElementById('lightboxPrompt').textContent = images[currentIndex].prompt;
+        }
+
+        function showNextImage(event) {
+            event.stopPropagation();
+            currentIndex = (currentIndex < images.length - 1) ? currentIndex + 1 : 0;
+            lightboxImage.src = images[currentIndex].url;
+            document.getElementById('lightboxPrompt').textContent = images[currentIndex].prompt;
+        }
+
+        function showThemes() {
+            themeModal.style.display = 'block';
+            updateThemeList();
+        }
+
+        function updateThemeList() {
+            themeList.innerHTML = prompts.map((theme, index) => 
+                `<li>${theme} <button onclick="removeTheme(${index})">Remove</button></li>`
+            ).join('');
+        }
+
+        function removeTheme(index) {
+            const theme = prompts[index];
+            prompts.splice(index, 1);
+            generatedPrompts.delete(theme);
+            updateThemeList();
+        }
+
+        function closeModal() {
+            themeModal.style.display = 'none';
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        async function getRandomPrompt() {
+            if (prompts.length === 0) return null;
+            
+            const numThemes = Math.min(3, prompts.length);
+            const selectedThemes = [];
+            
+            // Cria uma cópia do array de prompts para não modificar o original
+            const shuffledPrompts = [...prompts];
+            shuffleArray(shuffledPrompts);
+            
+            for (let i = 0; i < numThemes; i++) {
+                selectedThemes.push(shuffledPrompts[i]);
+            }
+            
+            console.log("Selected themes:", selectedThemes); // Para depuração
+            
+            try {
+                const generatedPrompt = await generatePromptWithLLM(selectedThemes);
+                console.log("LLM generated prompt:", generatedPrompt); // Para depuração
+                return generatedPrompt || selectedThemes.join(' '); // Fallback to simple joining if LLM fails
+            } catch (error) {
+                console.error("Error generating prompt with LLM:", error);
+                return selectedThemes.join(' '); // Fallback to simple joining if there's an error
+            }
+        }
+
+        // Função para ajustar o tamanho da faixa de controles
+        function adjustControlsSize() {
+            const controls = document.querySelector('.controls');
+            const buttons = controls.querySelectorAll('button');
+            let totalWidth = 0;
+            
+            buttons.forEach(button => {
+                totalWidth += button.offsetWidth + 10; // 10px for margins
+            });
+            
+            controls.style.width = `${totalWidth + 20}px`; // 20px for padding
+            controls.style.left = `calc(50% - ${totalWidth / 2 + 10}px)`;
+        }
+
+        // Chama a função de ajuste quando a página carrega e quando a janela é redimensionada
+        window.addEventListener('load', adjustControlsSize);
+        window.addEventListener('resize', adjustControlsSize);
+
+        // Iniciar a geração de imagens
+        scheduleNextGeneration();
+
+        // Adicionar event listener para o seletor de velocidade
+        document.getElementById('speedSelector').addEventListener('change', updateGenerationSpeed);
+
+        window.onclick = function(event) {
+            if (event.target === themeModal) closeModal();
+        }
+    </script>
+</body>
+</html>
