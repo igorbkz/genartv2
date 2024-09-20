@@ -168,6 +168,19 @@
             max-width: 80%;
             text-align: center;
         }
+        .refresh-button {
+            font-size: 16px;
+            padding: 5px 10px;
+            background-color: #333;
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .refresh-button:hover {
+            background-color: #555;
+        }
     </style>
 </head>
 <body>
@@ -179,13 +192,11 @@
         <button onclick="showThemes()">Temas</button>
         <button onclick="togglePause()"><span id="pauseButtonText">Pausar</span></button>
         <select id="speedSelector" class="speed-selector" onchange="updateGenerationSpeed()">
-            <option value="5">5s</option>
-            <option value="10" selected>10s</option>
-            <option value="15">15s</option>
-            <option value="20">20s</option>
-            <option value="25">25s</option>
-            <option value="30">30s</option>
+            <option value="30">Lento</option>
+            <option value="15" selected>Normal</option>
+            <option value="7">Rápido</option>
         </select>
+        <button onclick="clearOldImages()" class="refresh-button">🔄</button>
     </div>
 
     <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
@@ -220,6 +231,23 @@
         const lightbox = document.getElementById('lightbox');
         const lightboxImage = document.getElementById('lightboxImage');
 
+        const MAX_STORED_IMAGES = 20;
+
+        // Load stored images when the page loads
+        window.addEventListener('load', () => {
+            loadStoredImages();
+            lastGenerationTime = Date.now();
+            checkAndGenerateImage();
+        });
+
+        function loadStoredImages() {
+            const storedImages = JSON.parse(localStorage.getItem('generatedImages')) || [];
+            storedImages.forEach(imageData => {
+                const imageUrl = imageData.data;
+                displayImage(imageUrl, imageData.prompt, null, false);
+            });
+        }
+
         async function query(prompt) {
             try {
                 const response = await fetch(API_URL, {
@@ -232,7 +260,7 @@
                 });
                 if (!response.ok) throw new Error(`HTTP status ${response.status}`);
                 const blob = await response.blob();
-                return URL.createObjectURL(blob);
+                return blob;
             } catch (error) {
                 console.error('Error fetching image:', error);
                 return null;
@@ -240,82 +268,100 @@
         }
 
         const usedPrompts = new Set();
+        const MAX_ATTEMPTS = 10; // Maximum number of attempts to generate a unique prompt
 
         async function generatePromptWithLLM(themes) {
             const systemPrompt = "You are an image prompt generator. Generate a short, interesting, and unique image prompt based on the given themes. The prompt should be no longer than 15 words and should not include any additional commentary or questions. Only output the prompt itself.";
             const userPrompt = themes.join(", ");
             
-            try {
-                const response = await fetch(LLAMA_API_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${API_KEY}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        inputs: `${systemPrompt}\n\nThemes: ${userPrompt}\n\nImage Prompt:`,
-                        parameters: {
-                            max_new_tokens: 30,
-                            temperature: 0.9,
-                            top_p: 0.95,
-                            do_sample: true,
-                            stop: ["\n", ".", "!"]
-                        }
-                    })
-                });
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+                try {
+                    const response = await fetch(LLAMA_API_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${API_KEY}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            inputs: `${systemPrompt}\n\nThemes: ${userPrompt}\n\nImage Prompt:`,
+                            parameters: {
+                                max_new_tokens: 70,
+                                temperature: 0.9 + (attempt * 0.1), // Increase temperature slightly with each attempt
+                                top_p: 0.95,
+                                do_sample: true,
+                                stop: ["\n", ".", "!"],
+                                seed: Date.now() + attempt // Use a different seed for each attempt
+                            }
+                        })
+                    });
 
-                if (!response.ok) throw new Error(`HTTP status ${response.status}`);
-                const result = await response.json();
-                console.log("Raw LLM response:", result); // Para depuração
-                let generatedPrompt = result[0].generated_text.split("Image Prompt:")[1].trim();
-                
-                // Remove qualquer texto após o primeiro ponto final ou ponto de exclamação
-                generatedPrompt = generatedPrompt.split(/[.!]/)[0].trim();
-                
-                // Limita o prompt a 15 palavras
-                const words = generatedPrompt.split(' ');
-                if (words.length > 15) {
-                    generatedPrompt = words.slice(0, 15).join(' ');
+                    if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+                    const result = await response.json();
+                    console.log("Raw LLM response:", result);
+                    let generatedPrompt = result[0].generated_text.split("Image Prompt:")[1].trim();
+                    
+                    generatedPrompt = generatedPrompt.split(/[.!]/)[0].trim();
+                    
+                    const words = generatedPrompt.split(' ');
+                    if (words.length > 15) {
+                        generatedPrompt = words.slice(0, 15).join(' ');
+                    }
+                    
+                    if (!usedPrompts.has(generatedPrompt)) {
+                        usedPrompts.add(generatedPrompt);
+                        return generatedPrompt;
+                    }
+                    
+                    console.log(`Attempt ${attempt + 1}: Generated prompt already used, trying again.`);
+                } catch (error) {
+                    console.error('Error generating prompt with LLM:', error);
                 }
-                
-                return generatedPrompt;
-            } catch (error) {
-                console.error('Error generating prompt with LLM:', error);
-                return null;
             }
+            
+            console.error('Failed to generate a unique prompt after maximum attempts');
+            return null;
         }
 
-        let generationInterval = 10000; // Padrão: 10 segundos
-        let generationTimeout;
+        let generationInterval = 15000; // Default: 15 seconds
+        let lastGenerationTime = 0;
+        let generationTimer;
 
         function updateGenerationSpeed() {
             const speedSelector = document.getElementById('speedSelector');
             generationInterval = parseInt(speedSelector.value) * 1000;
-            console.log("New generation interval:", generationInterval); // Para depuração
-            scheduleNextGeneration();
+            console.log("New generation interval:", generationInterval);
+            clearTimeout(generationTimer);
+            checkAndGenerateImage();
         }
 
-        function scheduleNextGeneration() {
-            clearTimeout(generationTimeout);
-            generationTimeout = setTimeout(() => {
+        function checkAndGenerateImage() {
+            const currentTime = Date.now();
+            if (currentTime - lastGenerationTime >= generationInterval) {
                 if (!paused && prompts.length > 0) {
                     generateImage().then(() => {
-                        scheduleNextGeneration();
+                        lastGenerationTime = Date.now();
+                        scheduleNextCheck();
                     });
                 } else {
-                    scheduleNextGeneration();
+                    scheduleNextCheck();
                 }
-            }, generationInterval);
+            } else {
+                scheduleNextCheck();
+            }
+        }
+
+        function scheduleNextCheck() {
+            const timeUntilNextCheck = Math.max(0, generationInterval - (Date.now() - lastGenerationTime));
+            generationTimer = setTimeout(checkAndGenerateImage, timeUntilNextCheck);
         }
 
         async function generateImage() {
-            if (paused || prompts.length === 0) return;
-            
             const prompt = await getRandomPrompt();
-            console.log("Final prompt for image generation:", prompt); // Para depuração
-            const imageUrl = await query(prompt);
-            if (imageUrl) {
-                requestAnimationFrame(() => displayImage(imageUrl, prompt));
+            console.log("Final prompt for image generation:", prompt);
+            const imageBlob = await query(prompt);
+            if (imageBlob) {
+                const imageUrl = URL.createObjectURL(imageBlob);
+                requestAnimationFrame(() => displayImage(imageUrl, prompt, imageBlob));
             } else {
                 console.error('Failed to generate image for:', prompt);
             }
@@ -341,6 +387,9 @@
         function togglePause() {
             paused = !paused;
             document.getElementById('pauseButtonText').textContent = paused ? 'Retomar' : 'Pausar';
+            if (!paused) {
+                checkAndGenerateImage();
+            }
         }
 
         function handleKeyDown(event) {
@@ -358,30 +407,47 @@
             });
         }, { rootMargin: '100px' });
 
-        function displayImage(imageUrl, prompt) {
+        function displayImage(imageUrl, prompt, imageBlob = null, isNew = true) {
             const container = document.getElementById('imageContainer');
             const imgCard = document.createElement('div');
             imgCard.classList.add('image-card');
             imgCard.innerHTML = `
                 <img src="${imageUrl}" alt="Generated Image" loading="lazy" decoding="async">
-                <div class="new-image-indicator">Nova</div>
+                ${isNew ? '<div class="new-image-indicator">Nova</div>' : ''}
             `;
             imgCard.onclick = () => showLightbox(imageUrl, prompt, container.children.length);
             container.insertBefore(imgCard, container.firstChild);
-            images.unshift({ url: imageUrl, prompt: prompt });
-            if (images.length > 50) {
-                const oldestImage = images.pop();
-                URL.revokeObjectURL(oldestImage.url);
-                container.lastChild.remove();
+            
+            if (isNew) {
+                images.unshift({ url: imageUrl, prompt: prompt, blob: imageBlob });
+                storeImage(imageBlob, prompt);
+                if (images.length > 50) {
+                    const oldestImage = images.pop();
+                    URL.revokeObjectURL(oldestImage.url);
+                    container.lastChild.remove();
+                }
+                if (currentIndex === -1) currentIndex = 0;
+                
+                const img = imgCard.querySelector('img');
+                img.dataset.src = imageUrl;
+                img.src = 'placeholder.jpg'; // Use a lightweight placeholder image
+                imageObserver.observe(img);
+                
+                showNewImageIndicator(imgCard);
             }
-            if (currentIndex === -1) currentIndex = 0;
-            
-            const img = imgCard.querySelector('img');
-            img.dataset.src = imageUrl;
-            img.src = 'placeholder.jpg'; // Use uma imagem de placeholder leve
-            imageObserver.observe(img);
-            
-            showNewImageIndicator(imgCard);
+        }
+
+        function storeImage(imageBlob, prompt) {
+            const reader = new FileReader();
+            reader.onloadend = function() {
+                let storedImages = JSON.parse(localStorage.getItem('generatedImages')) || [];
+                storedImages.unshift({ data: reader.result, prompt: prompt });
+                if (storedImages.length > MAX_STORED_IMAGES) {
+                    storedImages = storedImages.slice(0, MAX_STORED_IMAGES);
+                }
+                localStorage.setItem('generatedImages', JSON.stringify(storedImages));
+            }
+            reader.readAsDataURL(imageBlob);
         }
 
         function showLightbox(imageUrl, prompt, index) {
@@ -443,30 +509,28 @@
         async function getRandomPrompt() {
             if (prompts.length === 0) return null;
             
-            const numThemes = Math.min(3, prompts.length);
-            const selectedThemes = [];
+            const minThemes = 3;
+            const maxThemes = Math.min(10, prompts.length);
+            const numThemes = Math.floor(Math.random() * (maxThemes - minThemes + 1)) + minThemes;
             
-            // Cria uma cópia do array de prompts para não modificar o original
             const shuffledPrompts = [...prompts];
             shuffleArray(shuffledPrompts);
             
-            for (let i = 0; i < numThemes; i++) {
-                selectedThemes.push(shuffledPrompts[i]);
-            }
+            const selectedThemes = shuffledPrompts.slice(0, numThemes);
             
-            console.log("Selected themes:", selectedThemes); // Para depuração
+            console.log("Selected themes:", selectedThemes);
             
-            try {
-                const generatedPrompt = await generatePromptWithLLM(selectedThemes);
-                console.log("LLM generated prompt:", generatedPrompt); // Para depuração
-                return generatedPrompt || selectedThemes.join(' '); // Fallback to simple joining if LLM fails
-            } catch (error) {
-                console.error("Error generating prompt with LLM:", error);
-                return selectedThemes.join(' '); // Fallback to simple joining if there's an error
+            const generatedPrompt = await generatePromptWithLLM(selectedThemes);
+            if (generatedPrompt) {
+                console.log("LLM generated prompt:", generatedPrompt);
+                return generatedPrompt;
+            } else {
+                console.log("Falling back to simple theme joining");
+                return selectedThemes.join(' ');
             }
         }
 
-        // Função para ajustar o tamanho da faixa de controles
+        // Function to adjust the size of the controls bar
         function adjustControlsSize() {
             const controls = document.querySelector('.controls');
             const buttons = controls.querySelectorAll('button');
@@ -480,18 +544,24 @@
             controls.style.left = `calc(50% - ${totalWidth / 2 + 10}px)`;
         }
 
-        // Chama a função de ajuste quando a página carrega e quando a janela é redimensionada
+        // Call the adjustment function when the page loads and when the window is resized
         window.addEventListener('load', adjustControlsSize);
         window.addEventListener('resize', adjustControlsSize);
 
-        // Iniciar a geração de imagens
-        scheduleNextGeneration();
-
-        // Adicionar event listener para o seletor de velocidade
+        // Add event listener for the speed selector
         document.getElementById('speedSelector').addEventListener('change', updateGenerationSpeed);
 
         window.onclick = function(event) {
             if (event.target === themeModal) closeModal();
+        }
+
+        function clearOldImages() {
+            const container = document.getElementById('imageContainer');
+            container.innerHTML = '';
+            images.length = 0;
+            localStorage.removeItem('generatedImages');
+            currentIndex = -1;
+            usedPrompts.clear(); // Clear the set of used prompts when clearing old images
         }
     </script>
 </body>
